@@ -1,0 +1,565 @@
+---
+title: "Analysis of Neural Activity In Response to Visual Stimuli"
+author: "Jonas Kempf"
+date: "Monday, 20 Mar 2023"
+output:
+  html_document:
+    df_print: paged
+    number_sections: yes
+---
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.pos = 'H')
+```
+
+# Abstract 
+
+The distribution of neurons in the brain controlling vision, choice, action, and behavioral decisions is unknown, as is whether their ability to execute these functions relies on circuits that are shared or distinct. Experimental data was collected by Steinmetz et al. (2019) in order to learn more about neural distribution and activity across brain regions. Experiments were conducted on a total of 10 mice over 39 sessions, during which the mice were presented with visual stimuli, and then provided either a reward or penalty based on the result of their decisions in response to the stimuli. This report uses a subset of this data to answer two less broad questions: (1) How do neurons in the visual cortex respond to the stimuli presented on the left and right, and (2) how can we predict the outcome of each trial using the neural activities and stimuli? Using two-way anova, we find statistical differences in neural responses to left and right stimuli, and offer a model to predict the outcome (reward or penalty) of each trial.
+
+# Introduction
+
+The distribution of neurons across regions of the brain and their relationship with each other when performing functions pertaining to vision, choice, action, and behavioral decisions is not perfectly understood. Experiments conducted on mice over multiple sessions by Steinmetz et al. (2019) captured neural data in order to better understand these processes. This report makes use of a limited portion of the Steinmetz data in order to answer two correspondingly narrower questions relative to those asked in the original paper:
+
+1. How do neurons in the visual cortex respond to the stimuli presented on the left and right?
+
+2. How can we predict the outcome of each trial using the neural activities and stimuli?
+
+This paper's analysis is limited to data on two mice over five sessions. Using mean firing rate as the measure of neural activity, a mixed effects model will be presented to explain how the visual cortex responds to varying visual stimuli on either side of the subject. We conclude with a logistic regression aimed at predicting the outcome of each trial based on visual stimuli and the aggregate experience of the mice.
+
+# Background 
+
+The Steinmetz data comes from experiments conducted on 10 mice over 39 sessions, with each session composed of several hundred trials during which activity from a grand total of 29,134 neurons was recorded. Specifically, in each session, mice were presented visual stimuli randomly by two screens displayed to their left and right. The contrast levels of these stimuli varied, taking discrete values of 0, 0.25, 0.5, and 1, with 0 representing no stimulus. The mice were trained to make decisions based on these stimuli ahead of time, and they used a wheel to record their responses. Based on their decision, they received either a reward or penalty. The neural activity associated with their responses to visual stimuli were recorded as spike trains, which are simply a collection of timestamps that correspond to neuron firing.
+
+For this report, we make use of data on just two mice--Cori and Forssmann--over 5 sessions. Furthermore, we focus only on spike trains corresponding to neurons in the visual cortex up to 0.4 seconds following the presentation of a visual stimulus. Two unique features of the dataset and subsequent analysis are important to address explicitly. First, the number of neurons measured during each session is not the same, nor are the number of trials. As a consequence, we do not have a balanced design. Related to this is the second feature, which is the selection of our model's outcome variable. This report opted to use mean firing rate. Explicitly, this was calculated as the average number of spikes across all neurons within our 0.4 second window, for each trial, i.e.:
+
+$$\frac{\text{total number of spikes}}{\text{(total number of neurons*0.4)}}$$
+
+By collapsing the dataset in this way, we address the issue of varying number of neurons across sessions. Since we have a large enough amount of neurons recorded in each session, a simple mean reasonably captures the neural activity we are interested in. In other words, mean firing rate allows us to reduce the dimensionality of the data in such a way that we can compare results across trials and sessions. An added benefit to this approach is that we reduce the noise in the data by considering a quantitative summary measure of an entire group of neurons.
+
+# Descriptive analysis
+
+```{r include = FALSE}
+#Set up the dataset here.
+library(gplots)
+library(qwraps2)
+options(qwraps2_markup = "markdown")
+library(dplyr)
+library(tidyverse)
+library(pastecs)
+library(ggplot2)
+library(car)
+library(lme4)
+library(pander)
+library(lmerTest)
+library(lattice)
+library(tibble)
+library(janitor)
+
+# session1 <- readRDS('/Users/jkempf/Library/Mobile Documents/com~apple~CloudDocs/UC Davis/Winter 2023/STA207/Course Project/session1.rds')
+# session2 <- readRDS('/Users/jkempf/Library/Mobile Documents/com~apple~CloudDocs/UC Davis/Winter 2023/STA207/Course Project/session2.rds')
+# session3 <- readRDS('/Users/jkempf/Library/Mobile Documents/com~apple~CloudDocs/UC Davis/Winter 2023/STA207/Course Project/session3.rds')
+# session4 <- readRDS('/Users/jkempf/Library/Mobile Documents/com~apple~CloudDocs/UC Davis/Winter 2023/STA207/Course Project/session4.rds')
+# session5 <- readRDS('/Users/jkempf/Library/Mobile Documents/com~apple~CloudDocs/UC Davis/Winter 2023/STA207/Course Project/session5.rds')
+
+session=list()
+for(i in 1:5){
+  session[[i]]=readRDS(paste('/Users/jkempf/Library/Mobile Documents/com~apple~CloudDocs/UC Davis/Winter 2023/STA207/Course Project/session',i,'.rds',sep=''))
+  print(session[[i]]$mouse_name)
+  print(session[[i]]$date_exp)
+}
+
+# Take the 11th trial in Session 1 for example
+id=11
+session[[1]]$feedback_type[id]
+session[[1]]$contrast_left[id]
+session[[1]]$contrast_right[id]
+length(session[[1]]$time[[id]])
+dim(session[[1]]$spks[[id]])
+
+# Obtain the firing rate 
+# averaged over [0,0.4] seconds since stim onsets
+# averaged across all neurons 
+
+ID=1
+t=0.4 # from Background 
+
+n.trials=length(session[[ID]]$spks)
+n.neurons=dim(session[[ID]]$spks[[1]])[1]
+
+# Obtain the firing rate 
+firingrate1=numeric(n.trials)
+for(i in 1:n.trials){
+  firingrate1[i]=sum(session[[ID]]$spks[[i]])/n.neurons/t
+}
+
+ID=2
+t=0.4 # from Background 
+
+n.trials=length(session[[ID]]$spks)
+n.neurons=dim(session[[ID]]$spks[[1]])[1]
+
+# Obtain the firing rate 
+firingrate2=numeric(n.trials)
+for(i in 1:n.trials){
+  firingrate2[i]=sum(session[[ID]]$spks[[i]])/n.neurons/t
+}
+
+ID=3
+t=0.4 # from Background 
+
+n.trials=length(session[[ID]]$spks)
+n.neurons=dim(session[[ID]]$spks[[1]])[1]
+
+# Obtain the firing rate 
+firingrate3=numeric(n.trials)
+for(i in 1:n.trials){
+  firingrate3[i]=sum(session[[ID]]$spks[[i]])/n.neurons/t
+}
+
+ID=4
+t=0.4 # from Background 
+
+n.trials=length(session[[ID]]$spks)
+n.neurons=dim(session[[ID]]$spks[[1]])[1]
+
+# Obtain the firing rate 
+firingrate4=numeric(n.trials)
+for(i in 1:n.trials){
+  firingrate4[i]=sum(session[[ID]]$spks[[i]])/n.neurons/t
+}
+
+ID=5
+t=0.4 # from Background 
+
+n.trials=length(session[[ID]]$spks)
+n.neurons=dim(session[[ID]]$spks[[1]])[1]
+
+# Obtain the firing rate 
+firingrate5=numeric(n.trials)
+for(i in 1:n.trials){
+  firingrate5[i]=sum(session[[ID]]$spks[[i]])/n.neurons/t
+}
+
+firingrate <- list(firingrate1, firingrate2, firingrate3, firingrate4, firingrate5)
+
+for(i in 1:5) {
+  session.number <- i
+  assign(paste0("sesh", i), as.data.frame(
+    cbind(
+      session.number,
+      firingrate[[i]],
+      session[[i]]$contrast_left,
+      session[[i]]$contrast_right,
+      session[[i]]$feedback_type
+    )
+  ))
+}
+
+sesh1 <- sesh1 %>% rename("firingrate" = "V2", "contrast_left" = "V3", "contrast_right" = "V4", "feedback_type" = "V5")
+sesh2 <- sesh2 %>% rename("firingrate" = "V2", "contrast_left" = "V3", "contrast_right" = "V4", "feedback_type" = "V5")
+sesh3 <- sesh3 %>% rename("firingrate" = "V2", "contrast_left" = "V3", "contrast_right" = "V4", "feedback_type" = "V5")
+sesh4 <- sesh4 %>% rename("firingrate" = "V2", "contrast_left" = "V3", "contrast_right" = "V4", "feedback_type" = "V5")
+sesh5 <- sesh5 %>% rename("firingrate" = "V2", "contrast_left" = "V3", "contrast_right" = "V4", "feedback_type" = "V5")
+
+data <- rbind(sesh1, sesh2, sesh3, sesh4, sesh5)
+data$contrast_left <- as.factor(data$contrast_left)
+data$contrast_right <- as.factor(data$contrast_right)
+data$session.number <- as.factor(data$session.number)
+data$feedback_type <- as.factor(data$feedback_type)
+data <- data %>% group_by(session.number) %>% mutate(trial.number = row_number())
+
+
+#Make the dataset for the prediction question.
+data.logit <- data
+data.logit <- data.logit %>% group_by(session.number) %>% mutate(trial.number = row_number())
+data.logit$mouse <- "Cori"
+data.logit <- mutate(data.logit, mouse = case_when(
+  session.number == "3" ~ "Forssman",
+  session.number == "4" ~ "Forssman",
+  session.number == "5" ~ "Forssman", 
+  TRUE   ~ mouse 
+))
+data.logit$mouse <- as.factor(data.logit$mouse)
+data.logit$session.number <- as.numeric(data.logit$session.number)
+data.logit <- mutate(data.logit, session.number = case_when(
+  session.number == 3 ~ 1,
+  session.number == 4 ~ 2,
+  session.number == 5 ~ 3, 
+  TRUE   ~ session.number 
+))
+data.logit$feedback_type <- as.numeric(data.logit$feedback_type)
+data.logit$feedback_type[data.logit$feedback_type == 1] <- 0
+data.logit$feedback_type[data.logit$feedback_type == 2] <- 1
+data.logit.test <- data.logit[1:100,]
+data.logit.train <- data.logit[101:nrow(data.logit),]
+
+#for prediction, we need to consider the fact that the mouse can learn these tasks/remember rewards from previous trials. So, a truly proper prediction model would likely involve some time series analysis. We haven't learned this yet, so I can't implement these methods. We can add proxies in an attempt to control for this, though. We want to control for the fact that the mice are different, that session 2 for one mouse is being done after that mouse already completed an entire earlier session, and similarly that trial 2 is being done after having the experience from trail 1. So, for instance, our model could be feedbacktype = contrast_left + contrast_right + mouse + session_number + trail_number.
+
+data <- data %>% mutate(firingrate_binned = cut(firingrate, breaks=c(0, 1, 2, 3, 4, 5, 6, 7, 8)))
+```
+
+Below we have summary statistics of our primary variables of interest, with each column indicating one of the five sessions. Apparent are the differences in number of trials, indicating we have an imbalanced design, as well as differences in nearly all variables across sessions. Feedback type, which will be used for the predictive analysis to indicate trial success or failure, is the only variable that stays relatively consistent from one session to another. This table is our first indication that controlling for session will be important.
+
+```{r, echo=FALSE, results="asis", warning=FALSE, message=FALSE}
+qwraps2::summary_table(data,
+              summaries = qsummary(data[, c("firingrate", "contrast_left", "contrast_right", "feedback_type")]), by = "session.number")
+```
+
+Below we show the distribution of average firing rate, our outcome variable. While the mean varies and there are some indications of right-skewed distributions, the data appear to be by and large normal. We will proceed under this assumption and recheck normality in the sensitivity analysis section later.
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# ggplot(data = data %>% filter(data$session.number==1), aes(x = firingrate)) +
+#     geom_histogram()
+# ggplot(data = data %>% filter(data$session.number==2), aes(x = firingrate)) +
+#     geom_histogram()
+# ggplot(data = data %>% filter(data$session.number==3), aes(x = firingrate)) +
+#     geom_histogram()
+# ggplot(data = data %>% filter(data$session.number==4), aes(x = firingrate)) +
+#     geom_histogram()
+# ggplot(data = data %>% filter(data$session.number==5), aes(x = firingrate)) +
+#     geom_histogram()
+
+ggplot(data = data, aes(x = firingrate)) +
+    geom_histogram(fill = "skyblue3") +
+    facet_grid(cols = vars(session.number)) +
+    labs(title = "Session number",
+             x = "Mean firing rate",
+             y = "Number of trials")
+```
+
+Next, we show boxplots of firing rate by the contrasted presented on the left and right, by session. The following features are evident: First, we can see that mean firing rate is different for sessions 1 through 3 compared to 4 and 5. This corresponds to the different mice, Cori and Forssmann. Even between sessions for the same mouse, however, there are clear differences in mean firing rate. This indicates that we should consider controlling for session as a random effect. Second, mean firing rate tends to increase as contrast increases. In other words, the stronger the visual stimulus, the greater the neural activity we record. Finally, we don't have an outlier issue with this data. There are few outlying points, and even among those, they are not very severe.
+
+```{r echo = FALSE}
+ggplot(data=data) + 
+  geom_boxplot(aes(x=contrast_right, y=firingrate), fill="chartreuse3") +
+  labs(x = "Contrast_right", y = "Mean firing rate") +
+  facet_grid(cols = vars(session.number)) +
+    labs(title = "Session number",
+             x = "Contrast right",
+             y = "Firing rate")
+
+ggplot(data=data) + 
+  geom_boxplot(aes(x=contrast_left, y=firingrate), fill="blueviolet") +
+  labs(x = "Contrast_left", y = "Mean firing rate") +
+  facet_grid(cols = vars(session.number)) +
+    labs(title = "Session number",
+             x = "Contrast left",
+             y = "Firing rate")
+```
+
+The final figure we present shows mean firing rate and trial success or failure as a function of trial number. This chart is included in the report largely because of its relevance to our predictive analysis. Several features are worth pointing out. First, lower firing rates appear to be associated with more failures. Second, failures tend to cluster in the bottom right of each session, which corresponds to the latter trials. Third, firing rates tend to decrease as sessions go on.
+
+```{r echo = FALSE}
+# ggplot(data=data) + 
+#   geom_jitter(aes(x=contrast_right, y=contrast_left, color=feedback_type), size=1, alpha=0.6) +
+#   facet_grid(cols = vars(session.number)) +
+#     labs(title = "Session number",
+#              x = "Contrast right",
+#              y = "Contrast left")
+
+ggplot(data=data) + 
+  geom_point(aes(x=trial.number, y=firingrate, color=as.factor(feedback_type)), size=1, alpha=0.6) +
+  facet_grid(cols = vars(session.number)) +
+    labs(title = "Session number",
+             x = "Trial number",
+             y = "Mean firing rate",
+         color = "Trial\nfeedback\ntype") +
+  scale_color_manual(labels=c('Failure', 'Success'), values=c("#F8766D", "#619CFF")) +
+  scale_x_continuous(breaks = c(0,100,200))
+```
+
+All three of these features likely work in concert when influencing trial outcome. For our predictive analysis, however, we are not interested in determining the impact of individual features on feedback type. Our primary concern is simply to ensure we include all relevant variables when constructing our model to maximize predictive performance. For now, then, it is sufficient to state that there is a case to be made that the mice get tired as sessions go on, and that controlling for time-in-session will be important in our predictive analysis later on.
+
+# Inferential analysis (Q1)
+
+We next consider the interaction plots of left and right contrast separately for each session. What we see is firstly more evidence that sessions should be considered separately, that is, as a random effect in our model. Abundantly clear at this point is that each session's interaction plot looks quite different from another session's plot. It is also worth noting that all plots have some intersecting lines, some of which are nearly perpendicular, indicating there's likely a statistically significant interaction effect. We will next proceed by testing this rigorously as we justify the construction of our model.
+
+```{r echo = FALSE}
+interaction.overall <- data %>%
+  group_by(contrast_left, contrast_right) %>%
+  summarise_at(vars(firingrate), list(firingrate = mean))
+interaction.bysession <- data %>%
+  group_by(contrast_left, contrast_right, session.number) %>%
+  summarise_at(vars(firingrate), list(firingrate = mean))
+
+ # ggplot(data=interaction.overall) +
+ #  aes(x = contrast_left, y = firingrate) +
+ #  geom_line(aes(group = contrast_right, color = contrast_right)) +
+ #    labs(title = "Interaction of contrasts over all sessions",
+ #             x = "Left contrast",
+ #             y = "Firing rate",
+ #         color = "Right contrast")
+
+ggplot(data=interaction.bysession) +
+  aes(x = contrast_left, y = firingrate) +
+  geom_line(aes(group = contrast_right, color = contrast_right)) +
+  facet_grid(cols = vars(session.number)) +
+    labs(title = "Interaction of contrasts by session number",
+             x = "Left contrast",
+             y = "Mean firing rate",
+         color = "Right contrast")
+```
+
+```{r echo=FALSE, include=FALSE}
+#with interaction
+model1 = aov(firingrate ~ contrast_left*contrast_right, data = data)
+summary(model1)
+#test reminder: https://stats.stackexchange.com/questions/271853/null-hypothesis-of-an-anova-when-comparing-regression-models
+
+model4 = lmerTest::lmer(firingrate ~ contrast_left*contrast_right + (1 | session.number), data = data, REML = TRUE)
+#model5 = lmerTest::lmer(firingrate ~ contrast_left+contrast_right + (1 | session.number), data = data, REML = TRUE) #this yields the 0.04 you were looking for
+#anova(model4, model5)
+```
+
+We find a p-value for the interaction of contrast left and right to be `r summary(model1)[[1]][["Pr(>F)"]][3]`. The null hypothesis for this test is that the mean effect of the interaction term is 0. The alternative is that the mean effect is nonzero. We reject the null at all commonly used significance levels and conclude there is an interaction effect present in the data.
+
+We also have quite a bit of evidence at this point suggesting that session should be controlled for. First, the interaction plots above as well as the mean firing rates and contrast boxplots from the descriptive analysis section point to notable differences across sessions. The next question is whether this should be treated as a fixed or random effect. Since we are only dealing with 5 of the 39 sessions, we think it is most appropriate to include session as a random effect so that our results can be generalized across other sessions. Treating session as random effectively allows us to incorporate the variability in the effect of session that comes from only picking a subset of all sessions. Furthermore, from a theoretical standpoint, the design of the Steinmetz et al. (2019) experiment tells us that session should be included as a random effect for roughly same reason that we include plots as random effects in split-plot design experiments.
+
+This reasoning and the figures above could also justify including mouse as a random effect, and indeed we see obvious differences by mouse in the previous section. However, it's not clear that this would capture much more variability that isn't already being captured by a random effect for session. Consequently, this report will follow the model that was suggested in the project prompt, but for future studies, this could be an area for further investigation.
+
+```{r echo=FALSE, include=FALSE}
+model3 = lm(firingrate ~ contrast_left*contrast_right, data = data)
+#summary(model3)
+
+#with interaction
+model4 = lmerTest::lmer(firingrate ~ contrast_left*contrast_right + (1 | session.number), data = data, REML = TRUE)
+#summary(model4)
+
+#Why does order matter here for R? (model3, model4) doesn't work
+lr.test <- anova(model4, model3)
+lr.test
+# model1 = lm(firingrate ~ 1, data = data)
+# model2 = lmer(firingrate ~ (1 | session.number), data = data)
+# lr.test <- anova(model2, model1)
+# lr.test
+```
+
+We next test rigorously for the inclusion of session as a random effect. This report employed a likelihood ratio test, finding a p-value of effectively `r round(lr.test$'Pr(>Chisq)'[2], 3)`. For this test, our full model includes the interaction of contrast plus a random effect for session. Our reduced model does not include the random effect for session. Our null hypothesis is that the there is no difference between the models, which would indicate we should use the reduced model as it is simpler. The alternative hypothesis is that there is a difference between the models, which would indicate that the random effect of session is statistically significant. Our p-value is significant at all commonly used alpha levels, so we reject the null hypothesis and conclude that we should account for the random effect of session.
+
+Our final model has the following form:
+
+$$Y_{ijkl} = \mu_{..} + \alpha_{i} + \beta_{j} + (\alpha\beta)_{ij} + \eta_{k} + \epsilon_{ijkl}$$
+
+where the parameters are as follows:
+
+$Y_{ijkl}$: This is the observed value of our outcome variable. In this case, it is the mean firing rate of the lth trial within the kth session having ith left contrast and jth right contrast.
+
+$\mu_{..}$: This is the overall mean of our outcome variable, i.e., the average mean firing rate across our 1,196 trials.
+
+$\alpha_{i}$: The mean effect of the ith left contrast. The index $i$ takes categorical values {0, 0.25, 0.5, 1}.
+
+$\beta_{j}$: The mean effect of the jth right contrast. The index $j$ takes categorical values {0, 0.25, 0.5, 1}.
+
+$(\alpha\beta)_{ij}$: The mean effect of the interaction of left and right contrast.
+
+$\eta_{k}$: The random effect of the kth session number. The index $k$ takes values {1, 2, 3, 4, 5}.
+
+$\epsilon_{ijkl}$: This is the random error term. It captures any effect on mean firing rate unexplained by left and right contrast and session number.
+
+Given our unbalanced design, our model's assumptions are as follows:
+
+(i) $\sum_{i=1}^4 n_i\alpha_i = 0$,
+
+(ii) $\sum_{j=1}^4 n_j\beta_j=0$,
+
+(iii) $\sum_{i=1}^4 n_{ij}(\alpha\beta)_{ij} =\sum_{j=1}^4 n_{ij}(\alpha\beta)_{ij} =0, \forall i,j$,
+
+(iv) ${\epsilon_{ijkl}\ \sim N(0,\sigma^2)}$,
+
+(v) ${\eta_k \sim N(0,\sigma_{\eta}^2)}$, and
+
+(vi) $\epsilon_{ijkl} \text{ and } \eta_k \text{ are mutually independent.}$
+
+```{r echo=FALSE, include=FALSE}
+summary(model4)
+```
+
+Below, we visualize the results of our model with a heat map. In the simplest terms, the figure shows that neural activity increases as stimulus increases. The darker shades of blue correspond to lower neural activity and tend to concentrate in the bottom left of the figure. Lighter shades of blue, on the other hand, reflect higher firing rate estimates and can be seen clustering in the top right cells. These results are largely expected, since the extreme end of the bottom left represents no left or right stimulus (values of 0 for both), while the top right represents the highest level of left and right stimulus. Further, we find that estimates of neural activity are roughly symmetric along this diagonal, although there are a few instances of firing rates differing from their "reversed" pairings. For example, our model estimates a mean firing rate increase of 2.97 for left contrast of 0 with right contrast of 0.25, while estimating a lower firing rate increase of 2.77 for left contrast of 0.25 and right contrast of 0. But, the opposite pattern occurs for left contrast of 0.25 and right contrast of 0.5 compared to left contrast of 0.5 and right contrast of 0.25. Here, the higher right contrast has a smaller impact on mean firing rate at 2.85 compared with the higher left contrast, estimated at 2.98. By and large, however, symmetry in terms of increasing neural activity appears to hold.
+
+```{r echo=FALSE, warning = FALSE, message = FALSE}
+#let's do a heatmap
+heat.coefs <- as.data.frame(summary(model4)$coef[,1])
+heat.coefs <- tibble::rownames_to_column(heat.coefs, "what")
+heat.coefs <- as.data.frame(t(heat.coefs))
+heat.coefs <- heat.coefs %>% row_to_names(row_number = 1)
+  
+contrastL <- c(0, 0.25, 0.5, 1)
+contrastR <- c(0, 0.25, 0.5, 1)
+
+heat.data <- expand.grid(as.data.frame(cbind(contrastL, contrastR)))
+heat.data <- bind_cols(heat.data, heat.coefs)
+heat.data <- as.data.frame(lapply(heat.data, as.numeric))
+heat.data <- heat.data %>% mutate(value =
+                          case_when(contrastL == 0.00 & contrastR == 0.00 ~ heat.data$X.Intercept.,
+                                    contrastL == 0.25 & contrastR == 0.00 ~ heat.data$X.Intercept. + heat.data$contrast_left0.25,
+                                    contrastL == 0.50 & contrastR == 0.00 ~ heat.data$X.Intercept. + heat.data$contrast_left0.5,
+                                    contrastL == 1.00 & contrastR == 0.00 ~ heat.data$X.Intercept.  + heat.data$contrast_left1,
+                                    contrastL == 0.00 & contrastR == 0.25 ~ heat.data$X.Intercept.  + heat.data$contrast_right0.25,
+                                    contrastL == 0.25 & contrastR == 0.25 ~ heat.data$X.Intercept.  + heat.data$contrast_left0.25 + heat.data$contrast_right0.25 + heat.data$'contrast_left0.25.contrast_right0.25',
+                                    contrastL == 0.50 & contrastR == 0.25 ~ heat.data$X.Intercept.  + heat.data$contrast_left0.5 + heat.data$contrast_right0.25 + heat.data$'contrast_left0.5.contrast_right0.25',
+                                    contrastL == 1.00 & contrastR == 0.25 ~ heat.data$X.Intercept.  + heat.data$contrast_left1 + heat.data$contrast_right0.25 + heat.data$'contrast_left1.contrast_right0.25',
+                                    contrastL == 0.00 & contrastR == 0.50 ~ heat.data$X.Intercept.  + heat.data$contrast_right0.5,
+                                    contrastL == 0.25 & contrastR == 0.50 ~ heat.data$X.Intercept.  + heat.data$contrast_left0.25 + heat.data$contrast_right0.5 + heat.data$'contrast_left0.25.contrast_right0.5',
+                                    contrastL == 0.50 & contrastR == 0.50 ~ heat.data$X.Intercept.  + heat.data$contrast_left0.5 + heat.data$contrast_right0.5 + heat.data$'contrast_left0.5.contrast_right0.5',
+                                    contrastL == 1.00 & contrastR == 0.50 ~ heat.data$X.Intercept.  + heat.data$contrast_left1 + heat.data$contrast_right0.5 + heat.data$'contrast_left1.contrast_right0.5',
+                                    contrastL == 0.00 & contrastR == 1.00 ~ heat.data$X.Intercept.  + heat.data$contrast_right1,
+                                    contrastL == 0.25 & contrastR == 1.00 ~ heat.data$X.Intercept.  + heat.data$contrast_left0.25 + heat.data$contrast_right1 + heat.data$'contrast_left0.25.contrast_right1',
+                                    contrastL == 0.50 & contrastR == 1.00 ~ heat.data$X.Intercept.  + heat.data$contrast_left0.5 + heat.data$contrast_right1 + heat.data$'contrast_left0.5.contrast_right1',
+                                    contrastL == 1.00 & contrastR == 1.00 ~ heat.data$X.Intercept.  + heat.data$contrast_left1 + heat.data$contrast_right1 + heat.data$'contrast_left1.contrast_right1'))
+
+heat.data <- heat.data %>% select(contrastL, contrastR, value)
+heat.data$contrastL <- as.factor(heat.data$contrastL)
+heat.data$contrastR<- as.factor(heat.data$contrastR)
+ 
+# Heatmap 
+ggplot(heat.data, aes(contrastL, contrastR, fill= value)) + 
+  geom_tile()  +
+    labs(title = "Model estimates of the impact of contrast on mean firing rate",
+             x = "Left contrast",
+             y = "Right contrast",
+         fill = "Estimated\nmean firing\nrate impact") +
+  geom_text(aes(label = round(value, 2)))
+
+#add numbers to plot
+```
+
+# Sensitivity analysis
+
+The residual plots of this report's fitted model are used here to verify that our model assumptions are reasonable. If they are, we can trust the results of the analysis.
+
+This report will check for:
+
+* the assumption of homogeneity of variance for error terms,
+* the assumption of normality for error terms,
+* the assumption of independence for error terms,
+* and verify our assumption of linearity and explore outliers.
+
+**Homogeneity of variance:**
+
+If our residuals violated this assumption, we'd see a pattern in the Scale-Location plot below, such as an expanding conical shape from left to right, indicating heteroskedasticity, rather than a uniformly distributed data cloud. From our plot, there is no obvious pattern to the residuals, so based on visual inspection, homogeneity of variance holds.
+
+Levene and Bartlett tests are not possible to conduct here because our model includes a random effect. Further, it is worth asking whether we are expecting to see non-constant variance in the first place. This typically occurs if we have severe outliers in the data or have omitted variable bias. From the exploratory data analysis and the residual plots later in this section, it's clear we do not have a serious issue with outliers. And, by including a random effect for session, we are controlling for a large source of known variability. So, we will safely proceed to the next assumption.
+
+```{r echo=FALSE}
+plot(model4,
+     sqrt(abs(resid(.)))~fitted(.),
+     type=c("p","smooth"), col.line="red",
+     main = "Scale-Location", xlab = "Fitted values", ylab = "Square root of standardized residuals",
+     col = "black")
+```
+
+
+**Normality for error terms:**
+
+The Normal Q-Q plot indicates whether the residuals follow a normal distribution. The plot should show the residuals following the straight dashed line, which represents a theoretical normal distribution. In our plot below, we have a somewhat long right tail, indicating a deviation from normality. However, this difference is not severe, and we will proceed assuming our normality assumption holds.
+
+```{r echo=FALSE}
+#library(ggResidpanel)
+lattice::qqmath(model4, col = "black", main ="Normal Q-Q plot")
+#shapiro.test(x = model4_residuals)
+```
+
+This report also explored dropping the largest outliers on both the left and right ends of the distribution from the analysis, but Shapiro-Wilk tests showed little improvement in our assumption of normality. This is a potential area for improvement in future reports, but will not be addressed further here.
+
+**Independence for error terms:**
+
+We can use the Residuals vs Fitted plot for this. With independent errors, we should a straight red line through 0 across all residuals. This seems to be generally true, and we proceed assuming independence holds based on visual inspection of this plot.
+
+```{r echo=FALSE}
+plot(model4, type=c("p","smooth"), col.line="red", main = "Residuals vs Fitted", xlab = "Fitted values", ylab = "Residuals", col = "black")
+```
+
+**Linearity:**
+
+The plot above also allows us to verify our linearity assumption. For linearity to hold, we should see an essentially horizontal red line across a cloud of residuals. This is indeed what we see, and it is indicative of a linear relationship among our model effect terms.
+
+**Outliers:** As mentioned above, there is no outlier problem with this data worth investigating. The residual plots above as well as the Residuals vs Leverage plot below do not show any observations that are far and away outside of what is reasonable based on the rest of the data. Further, this result is expected based on the boxplots from the exploratory data analysis section earlier.
+
+```{r echo=FALSE}
+plot(model4, rstudent(.) ~ hatvalues(.), main = "Residuals vs Leverage", xlab = "Leverage", ylab = "Standardized residuals", col = "black")
+```
+
+# Prediction
+
+```{r echo=FALSE, include=FALSE}
+model5 = glm(feedback_type ~ firingrate + contrast_left*contrast_right + session.number + trial.number + mouse,
+                   family = binomial(), data = data.logit)
+model6 = glm(feedback_type ~ firingrate + contrast_left*contrast_right + session.number + trial.number,
+                   family = binomial(), data = data.logit)
+model7 = glm(feedback_type ~ firingrate + contrast_left+contrast_right + session.number + trial.number,
+                   family = binomial(), data = data.logit)
+summary(model5)
+
+threshold = .617 #this determines the 
+predicted_values = ifelse(predict(model5, newdata = data.logit.test)>threshold,1,0)
+actual_values = data.logit.test$feedback_type
+conf_matrix = table(predicted_values, actual_values)
+conf_matrix
+
+TPR <- conf_matrix[2,2]/sum(conf_matrix[,2])*100
+TNR <- conf_matrix[1,1]/sum(conf_matrix[,1])*100
+TPR
+TNR
+
+library("pROC")
+
+roc1<-roc(model5$y, model5$fitted.values)
+roc2<-roc(model6$y, model6$fitted.values)
+roc3<-roc(model7$y, model7$fitted.values)
+roc1$auc
+roc2$auc
+roc3$auc
+
+plot(roc1, print.thres=T, main="ROC Curve for Final Model")
+plot(roc2, print.thres=T, main="ROC Curve for Final Model")
+plot(roc3, print.thres=T, main="ROC Curve for Final Model")
+```
+
+This report compared several predictive models with various covariates. For all comparisons, we trained each model on all records after the first 100 trials from session 1. These first 100 records were reserved for testing in order to determine predictive performance.
+
+Our exploratory data analysis indicated that including controls for the mice learning their tasks and gaining experience over time was important. Further, it was also important to consider that the mice appeared to get tired as sessions went on, lowering success rates. Including terms that capture information on time was therefore a high priority as we constructed the model. Second, we determined predictive performance solely by optimizing sensitivity and specificity.
+
+With the above considerations in mind, our best performing model was a logistic regression with the following fit and performance attributes:
+
+$$logit\{P(trial\; success)\}=-2.31+0.73X_{firingrate}-0.80X_{\text{contrast_left}=0.25}-0.10X_{\text{contrast_left}=0.5}+ 0.15X_{\text{contrast_left}=1}$$
+$$-1.13X_{\text{contrast_right}=0.25}+0.06X_{\text{contrast_right}=0.5}-0.79X_{\text{contrast_right}=1}$$
+$$+0.81X_{\text{contrast_left}=0.25:\text{contrast_right}=0.25}+0.00X_{\text{contrast_left}=0.5:\text{contrast_right}=0.25}+0.41X_{\text{contrast_left}=1:\text{contrast_right}=0.25}$$
+$$-0.15X_{\text{contrast_left}=0.25:\text{contrast_right}=0.5}-1.98X_{\text{contrast_left}=0.5:\text{contrast_right}=0.5}-1.62X_{\text{contrast_left}=1:\text{contrast_right}=0.5}$$
+$$+0.98X_{\text{contrast_left}=0.25:\text{contrast_right}=1}+0.41X_{\text{contrast_left}=0.5:\text{contrast_right}=1}-0.79X_{\text{contrast_left}=1:\text{contrast_right}=1}$$
+
+$$+0.82X_{session.number}-0.01X_{trial.number}+0.76X_{mouseForssman}$$
+
+**Sensitivity: 0.755**
+
+**Specificity: 0.586**
+
+**Area under the ROC curve: `r roc1$auc`**
+
+These attributes corresponded to a threshold of `r threshold`. These results are shown in the ROC plot below, which we cite to justify our choice of this threshold.
+
+```{r echo=FALSE}
+plot(roc1, print.thres=T, main="ROC Curve for Final Model")
+```
+
+# Conclusion
+
+This report sought to improve our understanding of neural activity in response to visual stimuli. After collapsing data collected by Steinmetz et al. (2019) to allow for cross-session comparisons, we presented answers to two primary research questions. First, using two-way anova with mixed effects, we report a statistically significant impact of visual stimuli on neuron firing. Specifically, the more intense the visual stimuli, the higher the the average firing rate. This trend was found to hold roughly symmetrically for the left and right sides. Second, this report presented a logistic regression model that can be used to predict trial outcomes. The predictive performance of the model was characterized by sensitivity of 0.755 and specificity of 0.586. Lastly, in terms of real-world impact, these findings indicate that providing stimulus to either side typically have a similar impact on neural firing in the visual cortex. Further, increasing the intensity of the stimulus should be expected to lead to both higher average firing rates as well as success in whatever task is being prompted by such stimuli Several possible areas for improvement were highlighted in the report, ranging from including animal as a random effect to selecting an alternative method for collapsing the dataset distinct from mean neural firing rate.
+
+
+# Acknowledgement {-}
+
+I have discussed this project with Chris Li, Niraj Bangari, and Kate Jones.
+
+# Reference {-}
+
+Steinmetz, N.A., Zatka-Haas, P., Carandini, M. et al. Distributed coding of choice, action and engagement across the mouse brain. Nature 576, 266–273 (2019). https://doi.org/10.1038/s41586-019-1787-x
+
+# Session info {-}
+
+<span style='color:blue'>
+Report information of your `R` session for reproducibility. 
+</span> 
+
+
+```{r}
+sessionInfo()
+```
